@@ -72,77 +72,102 @@ def accept_thread(server_socket):
         th.Thread(target = client_handler, args = (client_socket, )).start()
         print('{:*<30}'.format("*"))
 
-def recv_package(client_socket):
-    while True:
-        msg_header = client_socket.recv(HEADER)
-        if not msg_header:
-            return False
-
-        while(len(msg_header) != HEADER):
-            msg_header_tmp = client_socket.recv(HEADER - len(msg_header))
-            msg_header += msg_header_tmp
-        
-        msg_len = int(msg_header.decode(ENCODE).strip())
-
-        msg = client_socket.recv(msg_len)
-        if not msg_header:
-            return False
-
-        while(len(msg) != msg_len):
-            msg_tmp = client_socket.recv(HEADER - len(msg))
-            msg += msg_tmp
-        
-        return {'header':msg_header, 'data':msg}
-
 def send_to_all(client_socket, package):
     for client in clients:
         if client == client_socket: continue
         client.send(package)
 
-def client_handler(client_socket):
-    while True:
-        try:    
-            command_pack = recv_package(client_socket)
-            command = command_pack['data'].decode(ENCODE)
+def length_control(client_socket, data, length):
+    if (len(data) != length):
+        data_tmp = client_socket.recv(length - len(data))
+        data += data_tmp
+    return {'data_recived': len(data) == length, 'data': data}
 
-            if command == AUTHORIZATION:
-                user = recv_package(client_socket)
-                if user:
-                    clients[client_socket]['username'] = user['data']
-                    print('{:=<30}'.format("="))
-                    print(f"Authorization on {clients[client_socket]['ip']}:{clients[client_socket]['port']} complete.")
-                    print(f"Username - {user['data'].decode(ENCODE)}.")
-                    print('{:=<30}'.format("="))
+def recv_package(client_socket, buffer):
+    try:
+        # header recive
+        if not buffer['header_recived']:
+            msg_header = buffer['header']
+            data = length_control(client_socket, msg_header, HEADER)
+
+            buffer['header_recived'] = data['data_recived']
+            buffer['header'] = data['data']
+            if not data['data_recived']:
+                return False
+
+        # msg reciver
+        msg = buffer['data']
+        msg_len = int(buffer['header'].strip())
+        data = length_control(client_socket, msg, msg_len)
+        buffer['data_recived'] = data['data_recived']
+        buffer['data'] = data['data']
+        if not data['data_recived']:
+            return False
+
+        header = buffer['header']
+        msg = buffer['data']
+        buffer = {'header_recived':False, 'header': ''.encode(ENCODE),'data_recived':False, 'data':''.encode(ENCODE)}
+        return {'header':header, 'data':msg}
+    except:
+        return False
+
+def client_handler(client_socket):
+    try:
+        command_buf = None
+        buffer = {'header_recived': False, 'header': ''.encode(ENCODE),'data_recived': False, 'data':''.encode(ENCODE)} 
+        while True:
+            if command_buf == None:
+                command_pack, buffer = recv_package(client_socket, buffer)
+                if not command_pack:
+                    return
+                else:
+                    command_buf = command_pack['data'].decode(ENCODE)
+
+            command = command_buf
+            if command != DISCONNECT:
+                if not buffer['data_recived']:
+                    data_pack, buffer = recv_package(client_socket, buffer)
+                    if not data_pack:
+                        return
+                    else:
+                        if command == AUTHORIZATION:
+                            clients[client_socket]['user'] = data_pack
+                            print('{:=<30}'.format("="))
+                            print(f"Authorization on {clients[client_socket]['ip']}:{clients[client_socket]['port']} complete.")
+                            print(f"Username - {data_pack['data'].decode(ENCODE)}.")
+                            print('{:=<30}'.format("="))
+                        elif command == SEND:
+                            user = clients[client_socket]['user']
+                            print('{:-<30}'.format("-"))
+
+                            # Server time
+                            _time = str(time.time()).encode(ENCODE)
+                            time_header = f"{len(_time.decode(ENCODE)):<{HEADER}}".encode(ENCODE)
+                            msg_time = {'header': time_header, 'data': _time}
+
+                            # Send msg to other clients
+                            print("Sending to other users.")
+                            send_to_all(client_socket, user['header'] + user['data'] + data_pack['header'] + data_pack['data'] + msg_time['header'] + msg_time['data'])
+                            print("Sending done.")
+                            print('{:-<30}'.format("-"))
+
+                        elif command == CHANGE_NICK:
+                            print('{:/<30}'.format("/"))
+                            print(f"Nickname of {clients[client_socket]['ip']}:{clients[client_socket]['port']} changed.")
+                            print(f"Username - {data_pack['data'].decode(ENCODE)}.")
+                            clients[client_socket]['user'] = data_pack
+                            print('{:/<30}'.format("/"))
+                        command_buf[client_socket] = None
             elif command == DISCONNECT:
+                command_buf[client_socket] = None
                 raise OSError
-            elif command == SEND:
-                print('{:-<30}'.format("-"))
-                msg = recv_package(client_socket)
-                _time = time.strftime("%H:%M:%S", time.gmtime()).encode(ENCODE)
-                time_header = f"{len(_time):<{HEADER}}".encode(ENCODE)
-                msg_time = {'header':time_header, 'data': _time}
-                print(f"<{_time.decode(ENCODE)}> Received message from {user['data'].decode(ENCODE)}: \"{msg['data'].decode(ENCODE)}\"")
-                print("Sending to other users.")
-                send_to_all(client_socket, user['header'] + user['data'] + msg['header'] + msg['data'] + msg_time['header'] + msg_time['data'])
-                print("Sending done.")
-                print('{:-<30}'.format("-"))
-            elif command == CHANGE_NICK:
-                user = recv_package(client_socket)
-                if user:
-                    print('{:/<30}'.format("/"))
-                    print(f"Nickname of {clients[client_socket]['ip']}:{clients[client_socket]['port']} changed.")
-                    print(f"Username - {user['data'].decode(ENCODE)}.")
-                    clients[client_socket]['username'] = user['data']
-                    print('{:/<30}'.format("/"))
-            else: raise Exception
-        except OSError:
-            print(f"Connection was closed by user {user['data'].decode(ENCODE)}.")
-            del clients[client_socket]
-            client_socket.shutdown(socket.SHUT_RDWR)
-            client_socket.close()
-            return
-        except Exception:
-            print(f"Bad command from user {user['data'].decode(ENCODE)}.")
-            return
+    except OSError:
+        user = clients[client_socket]['user']
+        print(f"Connection was closed by user {user['data'].decode(ENCODE)}.")
+        del clients[client_socket]
+        del buffer
+        client_socket.shutdown(socket.SHUT_RDWR)
+        client_socket.close()
+        return
             
 setup_server()
