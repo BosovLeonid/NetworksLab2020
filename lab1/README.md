@@ -31,6 +31,6 @@ ___
 :white_check_mark: Тестирование на локальном адресе   
 :white_check_mark: Тестирование в сети    
 :white_check_mark: Тестирование больших сообщений   
-:black_square_button: Тестирование с сервером    
-:black_square_button: Тестирование с имитацией сети
+:white_check_mark: Тестирование с сервером    
+:white_check_mark: Тестирование с имитацией сети
 
